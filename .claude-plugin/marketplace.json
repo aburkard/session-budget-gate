@@ -1,0 +1,18 @@
+{
+    "name": "aburkard",
+    "description": "Andrew Burkard's Claude Code plugins. Opt-in: adding this only lists the plugin, nothing runs until you install it.",
+    "owner": {
+        "name": "Andrew Burkard"
+    },
+    "plugins": [
+        {
+            "name": "session-budget-gate",
+            "source": "./",
+            "description": "Ask for an explicit go-ahead once a Claude Code session passes a spend threshold, so a long autonomous run pauses for confirmation instead of quietly consuming usage credits.",
+            "version": "0.1.0",
+            "displayName": "Session Budget Gate",
+            "category": "productivity",
+            "tags": ["budget", "cost", "usage-credits", "hooks", "guardrail"]
+        }
+    ]
+}
