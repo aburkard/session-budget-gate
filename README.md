@@ -1,11 +1,11 @@
 # Session Budget Gate
 
-Pauses a Claude Code session for an explicit go-ahead once its estimated spend
-passes a threshold, so a long autonomous run checks in with you instead of
-quietly drawing down usage credits.
+Pauses a Claude Code session for an explicit go-ahead **once you are over your
+plan's usage limit and spending usage credits.** While you are under the limit
+it does nothing at all: those tokens are already paid for. It exists so a long
+autonomous run checks in with you before quietly drawing down credits.
 
-Opt-in. Installing it is a per-person choice and it does nothing until you
-install it yourself.
+Opt-in. Installing it is a per-person choice; nothing runs until you install it.
 
 ## Install
 
@@ -14,63 +14,97 @@ install it yourself.
 /plugin install session-budget-gate@aburkard
 ```
 
-Adding the marketplace only makes the plugin *appear in the list*. It is not
-enabled until the second command, and installing any other plugin from this
-marketplace does not pull this one in.
+The first command only lists the plugin. Nothing is enabled until the second.
 
-> **Don't add this to `enabledPlugins` in managed settings.** That force-enables
-> a plugin for every org member, which is the opposite of what this one is for.
-> Leave it out and let people install it themselves.
+> Don't add this to `enabledPlugins` in managed settings. That force-enables it
+> for a whole org, which is the opposite of what it is for.
+
+## Enable plan-limit mode (the point of the plugin)
+
+Hooks never receive your plan-limit data, but Claude Code's **status line** does:
+`rate_limits.five_hour` and `rate_limits.seven_day`, each with `used_percentage`
+(0 to 100) and a `resets_at` time. This plugin ships a small status line wrapper
+that records those numbers to a file the hook reads. **Without it the hook gates
+nothing** and posts one note per session reminding you.
+
+1. Put the wrapper somewhere stable:
+
+   ```bash
+   mkdir -p ~/.claude/hooks && curl -fsSL -o ~/.claude/hooks/statusline-with-limits.sh \
+     https://raw.githubusercontent.com/aburkard/session-budget-gate/main/scripts/statusline-with-limits.sh \
+     && chmod +x ~/.claude/hooks/statusline-with-limits.sh
+   ```
+
+2. Point your status line at it in `~/.claude/settings.json`:
+
+   ```json
+   "statusLine": { "type": "command", "command": "/Users/YOU/.claude/hooks/statusline-with-limits.sh" }
+   ```
+
+3. **If a project you work in has its own status line** (a `statusLine` in the
+   project's `.claude/settings.json`), that setting outranks your user one. Add
+   the same `statusLine` block to that project's `.claude/settings.local.json`,
+   which is yours alone and gitignored. The wrapper detects the project's
+   `.claude/statusline-command.sh` and delegates to it, so what you see does
+   not change; it just records the limits on the way through.
+
+Restart Claude Code. You can confirm it is working when your status bar shows a
+`5h NN%` figure and `~/.claude/budget-state/rate-limits.json` exists.
+
+> **Plan caveat.** Claude Code's docs say `rate_limits` appears for Pro and Max
+> subscribers. Team seats share the same 5-hour and 7-day windows and the
+> author's Team-plan status line renders them, so it is expected to work there
+> too, but check for the `5h` figure in your status bar after restarting. If it
+> never appears, your account is not receiving the data and the hook will stay
+> in its do-nothing state.
 
 ## Behavior
 
-| Session spend | What happens |
+| Situation | What happens |
 |---|---|
-| Under the threshold | Nothing. The hook exits silently and your normal permission rules apply untouched. |
-| At or past it | The next tool call asks for confirmation, naming the running total. |
-| After you approve | The bar moves up one increment, so you are asked once per increment rather than on every tool call. |
-
-The default threshold is $50, and it is also the step size: you get asked at
-roughly $50, $100, $150, and so on. The budget is per session — a new session
-starts from zero.
+| Under the plan limit | Nothing. Silent, no matter how much the session has spent. Your normal permission rules apply untouched. |
+| A window reaches 100% | The next tool call asks for confirmation, once, naming the window and when it resets. |
+| Still over, spending credits | Asks again after every $50 (estimated) of credit spend, not on every call. |
+| The window resets | Quiet again. The next crossing asks afresh. |
+| No limit data available | Nothing is gated. One non-blocking note per session says how to enable it. |
 
 The hook never returns an `allow` decision, because that would auto-approve the
-call and bypass your own permission rules. Under budget it stays silent, which
-leaves default behavior exactly as it was.
+call and bypass your own permission rules. When it has nothing to say it exits
+silently, leaving default behavior exactly as it was.
 
 ## Configure
 
-```bash
-export CLAUDE_SESSION_BUDGET_USD=25   # first ask, and the step size
-export CLAUDE_SESSION_BUDGET_DEBUG=1  # print the running total to stderr
-```
+Set these before launching Claude Code; the hook inherits the session's environment.
 
-Set these before launching Claude Code — the hook inherits its environment from
-the session.
+| Variable | Default | Meaning |
+|---|---|---|
+| `CLAUDE_SESSION_BUDGET_USD` | `50` | Credit-spend increment between check-ins |
+| `CLAUDE_SESSION_BUDGET_LIMIT_PCT` | `100` | Plan usage that counts as "over". Set `95` to be asked just before crossing |
+| `CLAUDE_SESSION_BUDGET_FALLBACK` | unset | `dollars` to gate on raw estimated spend when no limit data exists (the old tripwire) |
+| `CLAUDE_SESSION_BUDGET_DEBUG` | unset | `1` to print mode, spend, and limit state to stderr |
 
-## What the number actually is
+## What the dollar figure actually is
 
-Claude Code's transcript records token usage per response but no dollar figure,
-so this prices tokens itself at API list rates. **It is an estimate, not your
-plan's usage-credit ledger.** Treat the threshold as a proportional tripwire
-rather than an invoice.
-
-A model released after the price table was written is priced at Opus rates, and
-the confirmation prompt names it so you know to add the real row. The table
-lives at the top of `scripts/session-budget-gate.py`.
+The transcript records token usage per response but no dollar amount, so the
+hook prices tokens itself at API list rates. **It is an estimate, not your
+plan's credit ledger.** In plan-limit mode the only dollar figure that matters
+is the increment between check-ins after you cross, so the estimate's absolute
+accuracy is not load-bearing. A model released after the price table was
+written is priced at Opus rates and named in the prompt; the table is at the
+top of `scripts/session-budget-gate.py`.
 
 Two smaller caveats: the transcript is written asynchronously and can lag the
-current turn, so the total trails slightly and catches up on the next call; and
-spend is attributed by session ID, so resumed sessions continue their own total.
+current turn slightly, and limit data older than six hours, or a window whose
+`resets_at` has passed, is treated as unknown rather than trusted.
 
 ## Cost
 
-Measured on a 7.8 MB transcript: about 16 ms per tool call in steady state, and
-76 ms on the first call of a session. It reads only the bytes appended since the
-previous call rather than reparsing the transcript.
+About 16 ms per tool call in steady state, 76 ms on the first call of a session
+(measured on a 7.8 MB transcript). It reads only bytes appended since the
+previous call. The status line wrapper adds one `jq` pass and an atomic file
+write before delegating.
 
-It fails open on every error path — malformed input, a missing transcript, an
-unreadable state file. A budget guard must not be able to break a session.
+Fails open on every error path. A budget guard must not be able to break a session.
 
 ## Remove
 
@@ -78,5 +112,5 @@ unreadable state file. A budget guard must not be able to break a session.
 /plugin uninstall session-budget-gate@aburkard
 ```
 
-If you also wired this script into your own `~/.claude/settings.json` before
-installing the plugin, remove that entry so the hook is not registered twice.
+Then remove the `statusLine` entries you added (or point them back at your
+previous status line) and delete `~/.claude/budget-state/` if you like.
