@@ -19,7 +19,8 @@ mkdir -p "$state_dir"
 # never sees a half-written file.
 if command -v jq >/dev/null 2>&1; then
   tmp="$state_dir/.rate-limits.$$.tmp"
-  printf '%s' "$input" | jq -c --arg now "$(date +%s)" '{
+  # Skip writes without limit data so a fresh session can't null out good data.
+  printf '%s' "$input" | jq -ce --arg now "$(date +%s)" 'select(.rate_limits != null) | {
       updated_at: ($now | tonumber),
       session_id: .session_id,
       total_cost_usd: .cost.total_cost_usd,

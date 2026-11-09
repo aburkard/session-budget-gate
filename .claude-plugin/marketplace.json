@@ -8,8 +8,8 @@
         {
             "name": "session-budget-gate",
             "source": "./",
-            "description": "Ask for an explicit go-ahead once a Claude Code session passes a spend threshold, so a long autonomous run pauses for confirmation instead of quietly consuming usage credits.",
-            "version": "0.2.0",
+            "description": "Ask for an explicit go-ahead once a Claude Code session goes past your plan limit and starts spending usage credits. Works in the terminal and the desktop app.",
+            "version": "0.3.0",
             "displayName": "Session Budget Gate",
             "category": "productivity",
             "tags": [

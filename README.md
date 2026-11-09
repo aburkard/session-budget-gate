@@ -14,6 +14,9 @@ burning through credits.
 So: under the limit, this does nothing. When you hit it, it asks once. If you
 say yes, it asks again every $50 or so of credit spend.
 
+On Team plans, only an Owner can cap or turn off a member's extra usage. This is
+the do-it-yourself version: it only affects you.
+
 ## Install
 
 Everyone installs it for themselves. Nothing here turns on for anyone else.
@@ -23,54 +26,73 @@ Everyone installs it for themselves. Nothing here turns on for anyone else.
 /plugin install session-budget-gate@aburkard
 ```
 
-Then do the status line step below. Without it the hook has nothing to go on.
+Then do the token step below. Without it the hook has nothing to go on.
 
-## The status line step
+## The token step
 
-Claude Code doesn't tell hooks how much of your limit you've used. It does tell
-the status line. So this repo includes a small status line script that writes
-those numbers to a file, and the hook reads the file.
+Hooks aren't told how much of your plan you've used. But every API response
+carries rate-limit headers with exactly that: your 5-hour and 7-day usage, and
+whether usage credits are in use. So the hook sends a tiny request (one Haiku
+token) every couple of minutes while you're working, and reads the headers.
 
-1. Download the script:
+It needs its own login token for that:
+
+1. Make a long-lived token. This opens a browser login and prints a token that
+   lasts a year:
 
    ```bash
-   mkdir -p ~/.claude/hooks && curl -fsSL -o ~/.claude/hooks/statusline-with-limits.sh \
-     https://raw.githubusercontent.com/aburkard/session-budget-gate/main/scripts/statusline-with-limits.sh \
-     && chmod +x ~/.claude/hooks/statusline-with-limits.sh
+   claude setup-token
    ```
 
-2. Set it as your status line in `~/.claude/settings.json`:
+2. Save it in your Keychain. This prompts for a "password": paste the token
+   there, so it stays out of your shell history:
 
-   ```json
-   "statusLine": { "type": "command", "command": "/Users/YOU/.claude/hooks/statusline-with-limits.sh" }
+   ```bash
+   security add-generic-password -U -s claude-budget-gate -a "$USER" -w
    ```
 
-3. If a repo you work in has its own status line (a `statusLine` in its
-   `.claude/settings.json`), that one wins over yours. Add the same block to that
-   repo's `.claude/settings.local.json`, which is personal and gitignored. The
-   script notices the repo's own status line and runs it, so your status bar
-   looks the same as before. It just records the numbers on the way through.
+   Not on a Mac? Set `CLAUDE_BUDGET_GATE_TOKEN` to the token in your environment
+   instead.
 
-Restart Claude Code. If your status bar shows something like `5h 42%`, it's
-working.
+3. Check it:
 
-One caveat. The Claude Code docs say this data shows up for Pro and Max plans.
-I'm on a Team plan. If the `5h` number appears in your status bar after
-restarting, you're fine. If it never does, your plan isn't getting the data and
-the hook will just sit there doing nothing.
+   ```bash
+   ~/.claude/plugins/cache/aburkard/session-budget-gate/*/scripts/session-budget-gate.py --check
+   ```
+
+   You should see `HTTP 200`, a list of `anthropic-ratelimit-unified-*` headers,
+   and `Result: within plan -> silent` (unless you really are over).
+
+Works in both the terminal and the desktop app. When the token expires, the hook
+goes back to doing nothing and prints one reminder per session; redo steps 1–2.
+
+### Optional: the status line (terminal only)
+
+The older way to get the numbers still works as a fallback in the terminal CLI:
+Claude Code passes your limits to the status line, and
+`scripts/statusline-with-limits.sh` writes them to a file the hook reads. The
+desktop app never runs status lines, which is why the token step is now the main
+path. To use it, point `statusLine` in `~/.claude/settings.json` at that script.
+If a repo has its own status line, put the same block in that repo's
+`.claude/settings.local.json`; the script runs the repo's status line for you.
 
 ## What it does
 
 - **Under your limit:** nothing. Doesn't matter how much the session has spent.
-- **You hit a limit:** the next tool call asks you to confirm, and tells you
-  which limit and when it resets.
+- **You hit a limit, or the API says you're on credits:** the next tool call
+  asks you to confirm, and tells you which limit and when it resets.
 - **You keep going on credits:** it asks again every $50.
 - **The limit resets:** it goes quiet until the next time.
-- **No status line data:** it does nothing, and after a couple of tool calls it
-  prints one reminder about the step above.
+- **No limit data:** it does nothing, and after a couple of tool calls it prints
+  one reminder about the token step.
 
 It never auto-approves anything. When it has nothing to say it stays out of the
-way, and your normal permission prompts work like they always did.
+way, and your normal permission prompts work like they always did. The prompt
+shows up in auto mode too.
+
+Two gaps to know about. It only runs before tool calls, so a reply that's only
+text can still bill a little. And it checks at most every two minutes, so it can
+be up to two minutes late noticing you crossed.
 
 ## Settings
 
@@ -78,6 +100,7 @@ These are environment variables. Set them before you start Claude Code.
 
 | Variable | Default | What it does |
 |---|---|---|
+| `CLAUDE_BUDGET_GATE_TOKEN` | unset | The setup-token, if you'd rather not use the Keychain |
 | `CLAUDE_SESSION_BUDGET_USD` | `50` | How much credit spend between check-ins |
 | `CLAUDE_SESSION_BUDGET_LIMIT_PCT` | `100` | What counts as "over". Set `95` to get asked just before you cross |
 | `CLAUDE_SESSION_BUDGET_FALLBACK` | off | Set to `dollars` to get asked every $50 of total spend, even without limit data |
@@ -93,16 +116,19 @@ exact. The price table is at the top of `scripts/session-budget-gate.py`. If a
 model comes out that isn't in it, it gets priced like Opus and the prompt tells
 you.
 
-## Speed
+## Speed and cost
 
-About 16ms per tool call once it's warmed up, 76ms the first time in a session.
-It only reads the new part of the transcript each time, not the whole thing. If
-anything goes wrong it does nothing rather than block you.
+About 60ms per tool call normally. Once every two minutes (shared across all
+your sessions) a call also does the header check, which adds about half a
+second. That check is a one-token Haiku request, so it costs next to nothing.
+If anything goes wrong (no token, no network, odd response) the hook does
+nothing rather than block you.
 
 ## Uninstall
 
 ```
 /plugin uninstall session-budget-gate@aburkard
+security delete-generic-password -s claude-budget-gate
 ```
 
-Then take the `statusLine` entries back out.
+If you set up the status line, take the `statusLine` entries back out.
